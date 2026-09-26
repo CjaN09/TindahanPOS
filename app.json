@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "TindahanPOS",
+    "slug": "tindahan-pos",
+    "version": "1.0.5",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#070B14"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.cjnaguna.tindahanpos",
+      "versionCode": 5
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ea7b6129-4523-4926-9582-4e6110fb57fd"
+      }
+    },
+    "owner": "cjnaguna",
+    "plugins": [
+      "expo-status-bar",
+      "expo-audio",
+      "expo-sharing"
+    ]
+  }
+}
