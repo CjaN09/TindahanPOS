@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import * as SecureStore from 'expo-secure-store';
+import React, { useState, useEffect, useMemo } from 'react';
 import { playBeep, playCash } from '../utils/soundHelper';
 import { translations } from '../utils/translations';
 import {
@@ -44,101 +45,222 @@ export default function DashboardScreen({
 }) {
   const t = translations[language] || translations.english;
 
-  // --- SEARCH STATE ---
+  // ------------------------------------------------------------
+  // SEARCH
+  // ------------------------------------------------------------
+
   const [searchQuery, setSearchQuery] = useState('');
 
-  // --- DYNAMIC PIN & ACCESS CONTROL STATE ---
-  const PIN_STORAGE_KEY = '@admin_security_pin';
+  // ------------------------------------------------------------
+  // PIN / ACCESS CONTROL
+  // ------------------------------------------------------------
+
+  const PIN_STORAGE_KEY = 'admin_security_pin';
+  const LEGACY_PIN_STORAGE_KEY = '@admin_security_pin';
+
   const [isCashierMode, setIsCashierMode] = useState(false);
   const [savedPin, setSavedPin] = useState(null);
   const [pinInput, setPinInput] = useState('');
   const [pinConfirmInput, setPinConfirmInput] = useState('');
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [pinModalMode, setPinModalMode] = useState('unlock');
-  
-  // Security Lockout State
+
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutTimer, setLockoutTimer] = useState(0);
 
-  // --- CASH DRAWER & CASH ADJUSTMENTS STATE ---
+  // ------------------------------------------------------------
+  // CASH DRAWER
+  // ------------------------------------------------------------
+
   const [isSetCashModalOpen, setIsSetCashModalOpen] = useState(false);
-  const [drawerModalTab, setDrawerModalTab] = useState('starting'); // 'starting' | 'movement' | 'history'
+  const [drawerModalTab, setDrawerModalTab] = useState('starting');
   const [tempStartingCashInput, setTempStartingCashInput] = useState('');
-  const [movementType, setMovementType] = useState('out'); // 'in' | 'out'
+  const [movementType, setMovementType] = useState('out');
   const [movementAmount, setMovementAmount] = useState('');
   const [movementReason, setMovementReason] = useState('');
+
+  // ------------------------------------------------------------
+  // PRODUCTS
+  // ------------------------------------------------------------
 
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [filterCategory, setFilterCategory] = useState('All');
 
-  // Restock State
   const [restockProduct, setRestockProduct] = useState(null);
 
-  // POS Cart State
+  // ------------------------------------------------------------
+  // POS CART
+  // ------------------------------------------------------------
+
   const [cart, setCart] = useState([]);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [paymentType, setPaymentType] = useState('cash');
   const [cashTendered, setCashTendered] = useState('');
   const [customerName, setCustomerName] = useState('');
 
-  // Modals
+  // ------------------------------------------------------------
+  // OTHER MODALS
+  // ------------------------------------------------------------
+
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isDebtOpen, setIsDebtOpen] = useState(false);
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [activeReceipt, setActiveReceipt] = useState(null);
 
-  const categories = ['All', 'Cigarettes', 'Snacks', 'Beverages', 'Canned Goods', 'Coffee', 'Others'];
+  const categories = [
+    'All',
+    'Cigarettes',
+    'Snacks',
+    'Beverages',
+    'Canned Goods',
+    'Coffee',
+    'Others',
+  ];
+
+  // ------------------------------------------------------------
+  // LOAD PIN
+  // ------------------------------------------------------------
 
   useEffect(() => {
     loadSavedPin();
   }, []);
 
-  // Lockout Timer Effect (Counts down second by second)
+  const loadSavedPin = async () => {
+  try {
+    let pin = await SecureStore.getItemAsync(
+      PIN_STORAGE_KEY
+    );
+
+    // Migrate existing plaintext PIN from AsyncStorage
+    if (!pin) {
+      const legacyPin =
+        await AsyncStorage.getItem(
+          LEGACY_PIN_STORAGE_KEY
+        );
+
+      if (legacyPin) {
+        await SecureStore.setItemAsync(
+          PIN_STORAGE_KEY,
+          legacyPin
+        );
+
+        await AsyncStorage.removeItem(
+          LEGACY_PIN_STORAGE_KEY
+        );
+
+        pin = legacyPin;
+      }
+    }
+
+    if (pin) {
+      setSavedPin(pin);
+    }
+  } catch (error) {
+    console.error(
+      'Error loading Security PIN:',
+      error
+    );
+  }
+};
+
+  // ------------------------------------------------------------
+  // PIN LOCKOUT TIMER
+  // ------------------------------------------------------------
+
   useEffect(() => {
     let timer;
+
     if (lockoutTimer > 0) {
       timer = setInterval(() => {
-        setLockoutTimer((prev) => prev - 1);
+        setLockoutTimer((previous) => previous - 1);
       }, 1000);
     } else if (lockoutTimer === 0 && failedAttempts >= 3) {
       setFailedAttempts(0);
     }
-    return () => clearInterval(timer);
+
+    return () => {
+      if (timer) {
+        clearInterval(timer);
+      }
+    };
   }, [lockoutTimer, failedAttempts]);
 
-  const loadSavedPin = async () => {
-    try {
-      const pin = await AsyncStorage.getItem(PIN_STORAGE_KEY);
-      if (pin) setSavedPin(pin);
-    } catch (e) {
-      console.log('Error loading PIN:', e);
+  // ------------------------------------------------------------
+  // DATE HELPERS
+  // ------------------------------------------------------------
+
+  const isToday = (record) => {
+    if (!record) {
+      return false;
     }
+
+    let dateValue = null;
+
+    if (record.createdAtISO) {
+      dateValue = new Date(record.createdAtISO);
+    } else if (record.createdAt) {
+      dateValue = new Date(record.createdAt);
+    }
+
+    if (!dateValue || Number.isNaN(dateValue.getTime())) {
+      return false;
+    }
+
+    const now = new Date();
+
+    return (
+      dateValue.getFullYear() === now.getFullYear() &&
+      dateValue.getMonth() === now.getMonth() &&
+      dateValue.getDate() === now.getDate()
+    );
   };
+
+  // ------------------------------------------------------------
+  // CASH DRAWER
+  // ------------------------------------------------------------
 
   const handleSaveStartingCashSubmit = () => {
     const amount = parseFloat(tempStartingCashInput) || 0;
+
     onSaveStartingCash(amount);
+
     setIsSetCashModalOpen(false);
     setTempStartingCashInput('');
-    Alert.alert('Saved!', `Starting cash set to ₱${amount.toFixed(2)}.`);
+
+    Alert.alert(
+      'Saved!',
+      `Starting cash set to ₱${amount.toFixed(2)}.`
+    );
   };
 
   const handleAddMovementSubmit = () => {
     const amount = parseFloat(movementAmount);
-    if (isNaN(amount) || amount <= 0) {
-      Alert.alert('Invalid Amount', 'Please enter a valid cash amount.');
+
+    if (Number.isNaN(amount) || amount <= 0) {
+      Alert.alert(
+        'Invalid Amount',
+        'Please enter a valid cash amount.'
+      );
       return;
     }
 
-    const defaultReason = movementType === 'out' ? 'Expense / Cash Out' : 'Cash In / Addition';
-    const finalReason = movementReason.trim() ? movementReason.trim() : defaultReason;
+    const defaultReason =
+      movementType === 'out'
+        ? 'Expense / Cash Out'
+        : 'Cash In / Addition';
+
+    const finalReason = movementReason.trim()
+      ? movementReason.trim()
+      : defaultReason;
 
     const newMovement = {
       id: Date.now().toString(),
+      storeId: activeStore.id,
       type: movementType,
       amount,
       reason: finalReason,
+      createdAtISO: new Date().toISOString(),
       createdAt: new Date().toLocaleString('en-PH', {
         month: 'short',
         day: 'numeric',
@@ -148,6 +270,7 @@ export default function DashboardScreen({
     };
 
     onAddCashMovement(newMovement);
+
     setMovementAmount('');
     setMovementReason('');
     setIsSetCashModalOpen(false);
@@ -155,29 +278,53 @@ export default function DashboardScreen({
     Alert.alert(
       'Recorded!',
       movementType === 'out'
-        ? `Recorded an expense of ₱${amount.toFixed(2)} (${finalReason}).`
-        : `Recorded cash inflow of ₱${amount.toFixed(2)} (${finalReason}).`
+        ? `Recorded an expense of ₱${amount.toFixed(
+            2
+          )} (${finalReason}).`
+        : `Recorded cash inflow of ₱${amount.toFixed(
+            2
+          )} (${finalReason}).`
     );
   };
 
+  // ------------------------------------------------------------
+  // PIN
+  // ------------------------------------------------------------
+
   const handlePinSubmit = async () => {
     if (lockoutTimer > 0) {
-      Alert.alert('Locked Out', `Too many failed attempts. Please wait ${lockoutTimer}s.`);
+      Alert.alert(
+        'Locked Out',
+        `Too many failed attempts. Please wait ${lockoutTimer}s.`
+      );
       return;
     }
 
     if (pinInput.length !== 4) {
-      Alert.alert('Invalid Length', 'The PIN must be exactly 4 digits.');
+      Alert.alert(
+        'Invalid Length',
+        'The PIN must be exactly 4 digits.'
+      );
       return;
     }
 
-    if (pinModalMode === 'create' || pinModalMode === 'change') {
+    if (
+      pinModalMode === 'create' ||
+      pinModalMode === 'change'
+    ) {
       if (pinInput !== pinConfirmInput) {
-        Alert.alert('PIN Mismatch', 'The two PINs do not match. Try again.');
+        Alert.alert(
+          'PIN Mismatch',
+          'The two PINs do not match. Try again.'
+        );
         return;
       }
 
-      await AsyncStorage.setItem(PIN_STORAGE_KEY, pinInput);
+      await SecureStore.setItemAsync(
+  PIN_STORAGE_KEY,
+  pinInput
+    );
+
       setSavedPin(pinInput);
       setIsPinModalOpen(false);
       setPinInput('');
@@ -185,10 +332,18 @@ export default function DashboardScreen({
 
       if (pinModalMode === 'create') {
         setIsCashierMode(true);
-        Alert.alert('PIN Set!', 'Your Security PIN is saved and Cashier Mode is active.');
+
+        Alert.alert(
+          'PIN Set!',
+          'Your Security PIN is saved and Cashier Mode is active.'
+        );
       } else {
-        Alert.alert('PIN Changed!', 'Your Security PIN has been updated successfully.');
+        Alert.alert(
+          'PIN Changed!',
+          'Your Security PIN has been updated successfully.'
+        );
       }
+
       return;
     }
 
@@ -197,14 +352,20 @@ export default function DashboardScreen({
       setIsPinModalOpen(false);
       setPinInput('');
       setFailedAttempts(0);
-      Alert.alert('Admin Mode', 'Full Admin features are now unlocked.');
+
+      Alert.alert(
+        'Admin Mode',
+        'Full Admin features are now unlocked.'
+      );
     } else {
       const newAttempts = failedAttempts + 1;
+
       setFailedAttempts(newAttempts);
       setPinInput('');
 
       if (newAttempts >= 3) {
         setLockoutTimer(30);
+
         Alert.alert(
           'Locked Out! 🔒',
           'Too many incorrect attempts. PIN entry is locked for 30 seconds.'
@@ -235,60 +396,122 @@ export default function DashboardScreen({
     }
   };
 
+  // ------------------------------------------------------------
+  // STOCK STATUS
+  // ------------------------------------------------------------
+
   const getStockStatus = (prod) => {
-    const packsCount = Math.floor(prod.totalPiecesStock / prod.piecesPerPack);
-    const pieces = prod.totalPiecesStock;
+    const pieces = Number(prod.totalPiecesStock) || 0;
+    const piecesPerPack = Number(prod.piecesPerPack) || 1;
+
+    const packsCount = Math.floor(
+      pieces / piecesPerPack
+    );
+
+    const remainingPieces = pieces % piecesPerPack;
 
     if (pieces === 0) {
-      return { label: 'Out of Stock', bg: 'rgba(239, 68, 68, 0.15)', text: '#F87171' };
+      return {
+        label: 'Out of Stock',
+        bg: 'rgba(239, 68, 68, 0.15)',
+        text: '#F87171',
+      };
     }
+
     if (pieces <= 5 || packsCount === 0) {
       return {
-        label: `⚠️ Low! (${packsCount} pk | ${pieces % prod.piecesPerPack} pcs)`,
+        label: `⚠️ Low! (${packsCount} pk | ${remainingPieces} pcs)`,
         bg: 'rgba(239, 68, 68, 0.12)',
         text: '#F87171',
       };
     }
+
     if (packsCount <= 1) {
       return {
-        label: `Running Low (${packsCount} pk | ${pieces % prod.piecesPerPack} pcs)`,
+        label: `Running Low (${packsCount} pk | ${remainingPieces} pcs)`,
         bg: 'rgba(251, 191, 36, 0.12)',
         text: '#FBBF24',
       };
     }
+
     return {
       label: prod.isTingiEnabled
-        ? `${packsCount} pk | ${pieces % prod.piecesPerPack} pcs`
+        ? `${packsCount} pk | ${remainingPieces} pcs`
         : `${pieces} in stock`,
       bg: 'rgba(52, 211, 153, 0.12)',
       text: '#34D399',
     };
   };
 
+  // ------------------------------------------------------------
+  // ADD PRODUCT TO CART
+  // ------------------------------------------------------------
+
   const handleAddToCart = (product, type) => {
+    const piecesPerPack =
+      Number(product.piecesPerPack) || 1;
+
     const isPack = type === 'pack';
-    const piecesNeeded = isPack ? product.piecesPerPack : 1;
+
+    const piecesNeeded = isPack
+      ? piecesPerPack
+      : 1;
 
     const inCartPieces = cart
-      .filter((item) => item.productId === product.id)
-      .reduce((sum, item) => sum + (item.type === 'pack' ? item.quantity * product.piecesPerPack : item.quantity), 0);
+      .filter(
+        (item) =>
+          item.productId === product.id
+      )
+      .reduce(
+        (sum, item) =>
+          sum +
+          (item.type === 'pack'
+            ? item.quantity * piecesPerPack
+            : item.quantity),
+        0
+      );
 
-    if (product.totalPiecesStock < inCartPieces + piecesNeeded) {
-      Alert.alert('Out of Stock!', `Not enough stock available for ${product.name}. Please restock.`);
+    const availableStock =
+      Number(product.totalPiecesStock) || 0;
+
+    if (
+      availableStock <
+      inCartPieces + piecesNeeded
+    ) {
+      Alert.alert(
+        'Out of Stock!',
+        `Not enough stock available for ${product.name}. Please restock.`
+      );
       return;
     }
 
     playBeep(soundEnabled);
 
-    const price = isPack ? product.sellingPricePack : product.sellingPricePiece;
-    const costPerPiece = product.costPrice / product.piecesPerPack;
-    const cost = isPack ? product.costPrice : costPerPiece;
+    const price = isPack
+      ? Number(product.sellingPricePack) || 0
+      : Number(product.sellingPricePiece) || 0;
+
+    const costPerPiece =
+      (Number(product.costPrice) || 0) /
+      piecesPerPack;
+
+    const cost = isPack
+      ? Number(product.costPrice) || 0
+      : costPerPiece;
+
     const profit = price - cost;
 
-    const existingIndex = cart.findIndex((i) => i.productId === product.id && i.type === type);
+    const existingIndex = cart.findIndex(
+      (item) =>
+        item.productId === product.id &&
+        item.type === type
+    );
+
     if (existingIndex > -1) {
       const updated = [...cart];
+
       updated[existingIndex].quantity += 1;
+
       setCart(updated);
     } else {
       setCart([
@@ -307,21 +530,79 @@ export default function DashboardScreen({
     }
   };
 
-  const handleClearCart = () => setCart([]);
+  const handleClearCart = () => {
+    setCart([]);
+  };
 
-  const cartTotalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const cartTotalProfit = cart.reduce((sum, item) => sum + item.profit * item.quantity, 0);
-  const cartTotalItemsCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  // ------------------------------------------------------------
+  // CART TOTALS
+  // ------------------------------------------------------------
 
-  const handleProcessCheckout = () => {
+  const cartTotalAmount = useMemo(() => {
+    return cart.reduce(
+      (sum, item) =>
+        sum + item.price * item.quantity,
+      0
+    );
+  }, [cart]);
+
+  const cartTotalProfit = useMemo(() => {
+    return cart.reduce(
+      (sum, item) =>
+        sum + item.profit * item.quantity,
+      0
+    );
+  }, [cart]);
+
+  const cartTotalItemsCount = useMemo(() => {
+    return cart.reduce(
+      (sum, item) =>
+        sum + item.quantity,
+      0
+    );
+  }, [cart]);
+
+  // ------------------------------------------------------------
+  // CHECKOUT
+  // ------------------------------------------------------------
+
+  const handleProcessCheckout = async () => {
+    if (cart.length === 0) {
+      Alert.alert(
+        'Empty Cart',
+        'Please add at least one product before checkout.'
+      );
+      return;
+    }
+
+    const createdAtISO =
+      new Date().toISOString();
+
+    const createdAt =
+      new Date().toLocaleString('en-PH', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
     if (paymentType === 'cash') {
-      const cash = parseFloat(cashTendered) || 0;
+      const cash =
+        parseFloat(cashTendered) || 0;
+
       if (cash < cartTotalAmount) {
-        Alert.alert('Insufficient Amount', `The total amount is ₱${cartTotalAmount.toFixed(2)}.`);
+        Alert.alert(
+          'Insufficient Amount',
+          `The total amount is ₱${cartTotalAmount.toFixed(
+            2
+          )}.`
+        );
         return;
       }
 
-      const change = cash - cartTotalAmount;
+      const change =
+        cash - cartTotalAmount;
+
       const newReceipt = {
         id: Date.now().toString(),
         storeId: activeStore.id,
@@ -331,38 +612,42 @@ export default function DashboardScreen({
         paymentType: 'cash',
         cashTendered: cash,
         change,
-        createdAt: new Date().toLocaleString('en-PH', {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
+        createdAtISO,
+        createdAt,
       };
 
-      playCash(soundEnabled);
-      onCompleteSale(newReceipt, cart, null);
-      setActiveReceipt(newReceipt);
+      
+
+      await onCompleteSale(
+  newReceipt,
+  cart,
+  null
+);
+playCash(soundEnabled);
+setActiveReceipt(newReceipt);
     } else {
       if (!customerName.trim()) {
-        Alert.alert('Missing Name', 'Please enter the name of the customer for the credit record.');
+        Alert.alert(
+          'Missing Name',
+          'Please enter the name of the customer for the credit record.'
+        );
         return;
       }
+
+      const trimmedCustomerName =
+        customerName.trim();
 
       const newDebt = {
         id: Date.now().toString(),
         storeId: activeStore.id,
-        customerName: customerName.trim(),
+        customerName: trimmedCustomerName,
         items: [...cart],
         totalAmount: cartTotalAmount,
         balance: cartTotalAmount,
         totalProfit: cartTotalProfit,
         status: 'unpaid',
-        createdAt: new Date().toLocaleString('en-PH', {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
+        createdAtISO,
+        createdAt,
       };
 
       const newReceipt = {
@@ -372,14 +657,25 @@ export default function DashboardScreen({
         totalAmount: cartTotalAmount,
         totalProfit: cartTotalProfit,
         paymentType: 'debt',
-        customerName: customerName.trim(),
+        customerName: trimmedCustomerName,
         cashTendered: 0,
         change: 0,
-        createdAt: newDebt.createdAt,
+        createdAtISO,
+        createdAt,
       };
 
-      onCompleteSale(newReceipt, cart, newDebt);
-      Alert.alert('Credit Recorded!', `Recorded ₱${cartTotalAmount.toFixed(2)} under ${customerName.trim()}'s name.`);
+      await onCompleteSale(
+        newReceipt,
+        cart,
+        newDebt
+      );
+
+      Alert.alert(
+        'Credit Recorded!',
+        `Recorded ₱${cartTotalAmount.toFixed(
+          2
+        )} under ${trimmedCustomerName}'s name.`
+      );
     }
 
     setCart([]);
@@ -388,54 +684,214 @@ export default function DashboardScreen({
     setCustomerName('');
   };
 
-  // Filter by category + Real-time search query
-  const filteredProducts = products.filter((p) => {
-    if (p.storeId !== activeStore.id) return false;
-    const matchesCategory = filterCategory === 'All' || p.category === filterCategory;
-    const matchesSearch = p.name.toLowerCase().includes(searchQuery.trim().toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  // ------------------------------------------------------------
+  // STORE-SPECIFIC DATA
+  // ------------------------------------------------------------
 
-  const storeSales = sales.filter((s) => s.storeId === activeStore.id);
-  const storeDebts = debts.filter((d) => d.storeId === activeStore.id);
-  
-  const todaysSalesAmount = storeSales.reduce((sum, s) => sum + s.totalAmount, 0);
-  const todaysProfitAmount = storeSales.reduce((sum, s) => sum + (s.totalProfit || 0), 0);
+  const storeProducts = useMemo(() => {
+    if (!activeStore?.id) {
+      return [];
+    }
 
-  const actualCashSales = storeSales
-    .filter((s) => s.paymentType === 'cash')
-    .reduce((sum, s) => sum + s.totalAmount, 0);
+    return products.filter(
+      (product) =>
+        product.storeId === activeStore.id
+    );
+  }, [products, activeStore]);
 
-  const totalCashIn = cashMovements
-    .filter((m) => m.type === 'in')
-    .reduce((sum, m) => sum + m.amount, 0);
+  const storeSales = useMemo(() => {
+    if (!activeStore?.id) {
+      return [];
+    }
 
-  const totalCashOut = cashMovements
-    .filter((m) => m.type === 'out')
-    .reduce((sum, m) => sum + m.amount, 0);
+    return sales.filter(
+      (sale) =>
+        sale.storeId === activeStore.id
+    );
+  }, [sales, activeStore]);
 
-  const currentCashOnHand = startingCashValue + actualCashSales + totalCashIn - totalCashOut;
-  const cashValueCheckout = parseFloat(cashTendered) || 0;
+  const storeDebts = useMemo(() => {
+    if (!activeStore?.id) {
+      return [];
+    }
+
+    return debts.filter(
+      (debt) =>
+        debt.storeId === activeStore.id
+    );
+  }, [debts, activeStore]);
+
+  const storeCashMovements = useMemo(() => {
+    if (!activeStore?.id) {
+      return [];
+    }
+
+    return cashMovements.filter(
+      (movement) =>
+        movement.storeId === activeStore.id
+    );
+  }, [cashMovements, activeStore]);
+
+  // ------------------------------------------------------------
+  // TODAY'S DATA
+  // ------------------------------------------------------------
+
+  const todaysSales = useMemo(() => {
+    return storeSales.filter(isToday);
+  }, [storeSales]);
+
+  const todaysCashMovements = useMemo(() => {
+    return storeCashMovements.filter(isToday);
+  }, [storeCashMovements]);
+
+  const todaysSalesAmount = useMemo(() => {
+    return todaysSales.reduce(
+      (sum, sale) =>
+        sum +
+        (Number(sale.totalAmount) || 0),
+      0
+    );
+  }, [todaysSales]);
+
+  const todaysProfitAmount = useMemo(() => {
+    return todaysSales.reduce(
+      (sum, sale) =>
+        sum +
+        (Number(sale.totalProfit) || 0),
+      0
+    );
+  }, [todaysSales]);
+
+  const actualCashSales = useMemo(() => {
+    return todaysSales
+      .filter(
+        (sale) =>
+          sale.paymentType === 'cash'
+      )
+      .reduce(
+        (sum, sale) =>
+          sum +
+          (Number(sale.totalAmount) || 0),
+        0
+      );
+  }, [todaysSales]);
+
+  const totalCashIn = useMemo(() => {
+    return todaysCashMovements
+      .filter(
+        (movement) =>
+          movement.type === 'in'
+      )
+      .reduce(
+        (sum, movement) =>
+          sum +
+          (Number(movement.amount) || 0),
+        0
+      );
+  }, [todaysCashMovements]);
+
+  const totalCashOut = useMemo(() => {
+    return todaysCashMovements
+      .filter(
+        (movement) =>
+          movement.type === 'out'
+      )
+      .reduce(
+        (sum, movement) =>
+          sum +
+          (Number(movement.amount) || 0),
+        0
+      );
+  }, [todaysCashMovements]);
+
+  const currentCashOnHand =
+    (Number(startingCashValue) || 0) +
+    actualCashSales +
+    totalCashIn -
+    totalCashOut;
+
+  // ------------------------------------------------------------
+  // PRODUCT FILTER
+  // ------------------------------------------------------------
+
+  const filteredProducts = useMemo(() => {
+    const query =
+      searchQuery
+        .trim()
+        .toLowerCase();
+
+    return storeProducts.filter(
+      (product) => {
+        const matchesCategory =
+          filterCategory === 'All' ||
+          product.category ===
+            filterCategory;
+
+        const productName =
+          String(product.name || '')
+            .toLowerCase();
+
+        const matchesSearch =
+          productName.includes(query);
+
+        return (
+          matchesCategory &&
+          matchesSearch
+        );
+      }
+    );
+  }, [
+    storeProducts,
+    filterCategory,
+    searchQuery,
+  ]);
+
+  const cashValueCheckout =
+    parseFloat(cashTendered) || 0;
+
+  // ------------------------------------------------------------
+  // RENDER
+  // ------------------------------------------------------------
 
   return (
     <View style={styles.container}>
       {/* Header Bar */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.btnBack} activeOpacity={0.7} onPress={onBack}>
-          <Text style={styles.btnBackText}>{t.backToStores || t.stores}</Text>
+        <TouchableOpacity
+          style={styles.btnBack}
+          activeOpacity={0.7}
+          onPress={onBack}
+        >
+          <Text style={styles.btnBackText}>
+            {t.backToStores || t.stores}
+          </Text>
         </TouchableOpacity>
 
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.headerScrollContainer}
+          contentContainerStyle={
+            styles.headerScrollContainer
+          }
         >
           <TouchableOpacity
-            style={[styles.btnModeToggle, isCashierMode && styles.btnModeCashierActive]}
+            style={[
+              styles.btnModeToggle,
+              isCashierMode &&
+                styles.btnModeCashierActive,
+            ]}
             onPress={handleToggleModeClick}
           >
-            <Text style={[styles.btnModeToggleText, isCashierMode && styles.btnModeCashierActiveText]}>
-              {isCashierMode ? t.cashierMode : t.adminMode}
+            <Text
+              style={[
+                styles.btnModeToggleText,
+                isCashierMode &&
+                  styles.btnModeCashierActiveText,
+              ]}
+            >
+              {isCashierMode
+                ? t.cashierMode
+                : t.adminMode}
             </Text>
           </TouchableOpacity>
 
@@ -449,24 +905,61 @@ export default function DashboardScreen({
                 setIsPinModalOpen(true);
               }}
             >
-              <Text style={styles.btnPinSettingsText}>{t.pin}</Text>
+              <Text
+                style={styles.btnPinSettingsText}
+              >
+                {t.pin}
+              </Text>
             </TouchableOpacity>
           )}
 
           {!isCashierMode && (
-            <TouchableOpacity style={styles.btnAnalytics} onPress={() => setIsAnalyticsOpen(true)}>
-              <Text style={styles.btnAnalyticsText}>{t.stats}</Text>
+            <TouchableOpacity
+              style={styles.btnAnalytics}
+              onPress={() =>
+                setIsAnalyticsOpen(true)
+              }
+            >
+              <Text
+                style={styles.btnAnalyticsText}
+              >
+                {t.stats}
+              </Text>
             </TouchableOpacity>
           )}
 
-          <TouchableOpacity style={styles.btnDebtHeader} onPress={() => setIsDebtOpen(true)}>
-            <Text style={styles.btnDebtHeaderText}>
-              {t.debt} ({storeDebts.filter((d) => d.status === 'unpaid').length})
+          <TouchableOpacity
+            style={styles.btnDebtHeader}
+            onPress={() =>
+              setIsDebtOpen(true)
+            }
+          >
+            <Text
+              style={styles.btnDebtHeaderText}
+            >
+              {t.debt} (
+              {
+                storeDebts.filter(
+                  (debt) =>
+                    debt.status ===
+                    'unpaid'
+                ).length
+              }
+              )
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.btnHistory} onPress={() => setIsHistoryOpen(true)}>
-            <Text style={styles.btnHistoryText}>{t.history}</Text>
+          <TouchableOpacity
+            style={styles.btnHistory}
+            onPress={() =>
+              setIsHistoryOpen(true)
+            }
+          >
+            <Text
+              style={styles.btnHistoryText}
+            >
+              {t.history}
+            </Text>
           </TouchableOpacity>
 
           {!isCashierMode && (
@@ -477,7 +970,11 @@ export default function DashboardScreen({
                 setIsProductModalOpen(true);
               }}
             >
-              <Text style={styles.btnAddProdText}>{t.addItem}</Text>
+              <Text
+                style={styles.btnAddProdText}
+              >
+                {t.addItem}
+              </Text>
             </TouchableOpacity>
           )}
         </ScrollView>
@@ -486,51 +983,130 @@ export default function DashboardScreen({
       {/* Store Banner */}
       <View style={styles.bannerCard}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.storeName} numberOfLines={1}>{activeStore.name}</Text>
+          <Text
+            style={styles.storeName}
+            numberOfLines={1}
+          >
+            {activeStore.name}
+          </Text>
+
           <Text style={styles.ownerText}>
-            {isCashierMode ? t.staffView : activeStore.owner ? `In-Charge: ${activeStore.owner}` : t.posTerminal}
+            {isCashierMode
+              ? t.staffView
+              : activeStore.owner
+              ? `In-Charge: ${activeStore.owner}`
+              : t.posTerminal}
           </Text>
         </View>
 
         <View style={styles.statsContainer}>
           {!isCashierMode && (
             <>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.statBox}
                 activeOpacity={0.7}
                 onPress={() => {
-                  setTempStartingCashInput(startingCashValue.toString());
-                  setDrawerModalTab('starting');
-                  setIsSetCashModalOpen(true);
+                  setTempStartingCashInput(
+                    String(
+                      startingCashValue || 0
+                    )
+                  );
+                  setDrawerModalTab(
+                    'starting'
+                  );
+                  setIsSetCashModalOpen(
+                    true
+                  );
                 }}
               >
-                <Text style={[styles.dailyStatLabel, { color: '#FBBF24' }]}>{t.cashDrawer}</Text>
-                <Text style={[styles.dailyStatValue, { color: '#FBBF24' }]}>₱{currentCashOnHand.toFixed(2)}</Text>
+                <Text
+                  style={[
+                    styles.dailyStatLabel,
+                    { color: '#FBBF24' },
+                  ]}
+                >
+                  {t.cashDrawer}
+                </Text>
+
+                <Text
+                  style={[
+                    styles.dailyStatValue,
+                    { color: '#FBBF24' },
+                  ]}
+                >
+                  ₱
+                  {currentCashOnHand.toFixed(
+                    2
+                  )}
+                </Text>
               </TouchableOpacity>
-              <View style={styles.statDividerVertical} />
+
+              <View
+                style={
+                  styles.statDividerVertical
+                }
+              />
             </>
           )}
 
           <View style={styles.statBox}>
-            <Text style={styles.dailyStatLabel}>{t.salesToday}</Text>
-            <Text style={styles.dailyStatValue}>₱{todaysSalesAmount.toFixed(2)}</Text>
+            <Text
+              style={styles.dailyStatLabel}
+            >
+              {t.salesToday}
+            </Text>
+
+            <Text
+              style={styles.dailyStatValue}
+            >
+              ₱
+              {todaysSalesAmount.toFixed(
+                2
+              )}
+            </Text>
           </View>
 
           {!isCashierMode && (
             <>
-              <View style={styles.statDividerVertical} />
+              <View
+                style={
+                  styles.statDividerVertical
+                }
+              />
+
               <View style={styles.statBox}>
-                <Text style={[styles.dailyStatLabel, { color: '#38BDF8' }]}>{t.profit}</Text>
-                <Text style={[styles.dailyStatValue, { color: '#38BDF8' }]}>₱{todaysProfitAmount.toFixed(2)}</Text>
+                <Text
+                  style={[
+                    styles.dailyStatLabel,
+                    { color: '#38BDF8' },
+                  ]}
+                >
+                  {t.profit}
+                </Text>
+
+                <Text
+                  style={[
+                    styles.dailyStatValue,
+                    { color: '#38BDF8' },
+                  ]}
+                >
+                  ₱
+                  {todaysProfitAmount.toFixed(
+                    2
+                  )}
+                </Text>
               </View>
             </>
           )}
         </View>
       </View>
 
-      {/* SEARCH BAR COMPONENT */}
+      {/* Search */}
       <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
+        <Text style={styles.searchIcon}>
+          🔍
+        </Text>
+
         <TextInput
           style={styles.searchInput}
           placeholder="Search products by name..."
@@ -539,26 +1115,59 @@ export default function DashboardScreen({
           onChangeText={setSearchQuery}
           clearButtonMode="while-editing"
         />
+
         {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Text style={styles.searchClearBtn}>✕</Text>
+          <TouchableOpacity
+            onPress={() =>
+              setSearchQuery('')
+            }
+            hitSlop={{
+              top: 10,
+              bottom: 10,
+              left: 10,
+              right: 10,
+            }}
+          >
+            <Text
+              style={
+                styles.searchClearBtn
+              }
+            >
+              ✕
+            </Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Category Pills */}
+      {/* Categories */}
       <View style={{ marginBottom: 12 }}>
         <FlatList
           horizontal
-          showsHorizontalScrollIndicator={false}
+          showsHorizontalScrollIndicator={
+            false
+          }
           data={categories}
           keyExtractor={(item) => item}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={[styles.pill, filterCategory === item && styles.pillActive]}
-              onPress={() => setFilterCategory(item)}
+              style={[
+                styles.pill,
+                filterCategory ===
+                  item &&
+                  styles.pillActive,
+              ]}
+              onPress={() =>
+                setFilterCategory(item)
+              }
             >
-              <Text style={[styles.pillText, filterCategory === item && styles.pillTextActive]}>
+              <Text
+                style={[
+                  styles.pillText,
+                  filterCategory ===
+                    item &&
+                    styles.pillTextActive,
+                ]}
+              >
                 {item}
               </Text>
             </TouchableOpacity>
@@ -569,125 +1178,451 @@ export default function DashboardScreen({
       {/* Product List */}
       <FlatList
         data={filteredProducts}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingBottom: cart.length > 0 ? 120 : 24 }}
+        keyExtractor={(item) =>
+          String(item.id)
+        }
+        contentContainerStyle={{
+          paddingBottom:
+            cart.length > 0
+              ? 120
+              : 24,
+        }}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyEmoji}>🔎</Text>
-            <Text style={styles.emptyText}>No products found</Text>
-            <Text style={styles.emptySubText}>
-              {searchQuery ? `No matches for "${searchQuery}"` : 'Tap "+ Item" above to add products to your inventory.'}
+          <View
+            style={
+              styles.emptyContainer
+            }
+          >
+            <Text
+              style={styles.emptyEmoji}
+            >
+              🔎
+            </Text>
+
+            <Text
+              style={styles.emptyText}
+            >
+              No products found
+            </Text>
+
+            <Text
+              style={
+                styles.emptySubText
+              }
+            >
+              {searchQuery
+                ? `No matches for "${searchQuery}"`
+                : 'Tap "+ Item" above to add products to your inventory.'}
             </Text>
           </View>
         }
         renderItem={({ item }) => {
-          const status = getStockStatus(item);
+          const status =
+            getStockStatus(item);
+
+          const piecesPerPack =
+            Number(
+              item.piecesPerPack
+            ) || 1;
+
+          const costPrice =
+            Number(
+              item.costPrice
+            ) || 0;
+
+          const sellingPricePack =
+            Number(
+              item.sellingPricePack
+            ) || 0;
+
+          const sellingPricePiece =
+            Number(
+              item.sellingPricePiece
+            ) || 0;
 
           return (
-            <View style={styles.productCard}>
-              <View style={styles.prodHeader}>
-                <View style={{ flex: 1, paddingRight: 6 }}>
-                  <Text style={styles.prodCategory}>{item.category.toUpperCase()}</Text>
-                  <Text style={styles.prodName}>{item.name}</Text>
+            <View
+              style={
+                styles.productCard
+              }
+            >
+              <View
+                style={
+                  styles.prodHeader
+                }
+              >
+                <View
+                  style={{
+                    flex: 1,
+                    paddingRight: 6,
+                  }}
+                >
+                  <Text
+                    style={
+                      styles.prodCategory
+                    }
+                  >
+                    {String(
+                      item.category ||
+                        'Others'
+                    ).toUpperCase()}
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.prodName
+                    }
+                  >
+                    {item.name}
+                  </Text>
                 </View>
 
-                <View style={[styles.stockBadge, { backgroundColor: status.bg }]}>
-                  <Text style={[styles.stockBadgeText, { color: status.text }]}>
+                <View
+                  style={[
+                    styles.stockBadge,
+                    {
+                      backgroundColor:
+                        status.bg,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.stockBadgeText,
+                      {
+                        color:
+                          status.text,
+                      },
+                    ]}
+                  >
                     {status.label}
                   </Text>
                 </View>
               </View>
 
               {!isCashierMode ? (
-                <View style={styles.priceRow}>
-                  <View style={styles.priceBlock}>
-                    <Text style={styles.priceLabel}>{t.cost}</Text>
-                    <Text style={[styles.priceValue, { color: '#94A3B8' }]}>₱{item.costPrice.toFixed(2)}</Text>
+                <View
+                  style={
+                    styles.priceRow
+                  }
+                >
+                  <View
+                    style={
+                      styles.priceBlock
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.priceLabel
+                      }
+                    >
+                      {t.cost}
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.priceValue,
+                        {
+                          color:
+                            '#94A3B8',
+                        },
+                      ]}
+                    >
+                      ₱
+                      {costPrice.toFixed(
+                        2
+                      )}
+                    </Text>
                   </View>
 
-                  <View style={styles.priceBlock}>
-                    <Text style={styles.priceLabel}>{t.packPrice}</Text>
-                    <Text style={styles.priceValue}>
-                      ₱{item.sellingPricePack.toFixed(2)}{' '}
-                      <Text style={{ fontSize: 10, color: '#34D399' }}>
-                        (+₱{(item.sellingPricePack - item.costPrice).toFixed(1)})
+                  <View
+                    style={
+                      styles.priceBlock
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.priceLabel
+                      }
+                    >
+                      {t.packPrice}
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.priceValue
+                      }
+                    >
+                      ₱
+                      {sellingPricePack.toFixed(
+                        2
+                      )}{' '}
+                      <Text
+                        style={{
+                          fontSize: 10,
+                          color:
+                            '#34D399',
+                        }}
+                      >
+                        (+₱
+                        {(
+                          sellingPricePack -
+                          costPrice
+                        ).toFixed(1)}
+                        )
                       </Text>
                     </Text>
                   </View>
 
                   {item.isTingiEnabled && (
-                    <View style={styles.priceBlock}>
-                      <Text style={styles.priceLabel}>{t.tingiPrice}</Text>
-                      <Text style={[styles.priceValue, { color: '#38BDF8' }]}>
-                        ₱{item.sellingPricePiece.toFixed(2)}{' '}
-                        <Text style={{ fontSize: 10, color: '#34D399' }}>
-                          (+₱{(item.sellingPricePiece - (item.costPrice / item.piecesPerPack)).toFixed(1)})
+                    <View
+                      style={
+                        styles.priceBlock
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.priceLabel
+                        }
+                      >
+                        {t.tingiPrice}
+                      </Text>
+
+                      <Text
+                        style={[
+                          styles.priceValue,
+                          {
+                            color:
+                              '#38BDF8',
+                          },
+                        ]}
+                      >
+                        ₱
+                        {sellingPricePiece.toFixed(
+                          2
+                        )}{' '}
+                        <Text
+                          style={{
+                            fontSize: 10,
+                            color:
+                              '#34D399',
+                          }}
+                        >
+                          (+₱
+                          {(
+                            sellingPricePiece -
+                            costPrice /
+                              piecesPerPack
+                          ).toFixed(1)}
+                          )
                         </Text>
                       </Text>
                     </View>
                   )}
                 </View>
               ) : (
-                <View style={styles.priceRow}>
-                  <View style={[styles.priceBlock, { flex: 1, alignItems: 'flex-start', paddingLeft: 6 }]}>
-                    <Text style={styles.priceLabel}>{t.pricePackOnly}</Text>
-                    <Text style={styles.priceValue}>₱{item.sellingPricePack.toFixed(2)}</Text>
+                <View
+                  style={
+                    styles.priceRow
+                  }
+                >
+                  <View
+                    style={[
+                      styles.priceBlock,
+                      {
+                        flex: 1,
+                        alignItems:
+                          'flex-start',
+                        paddingLeft: 6,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={
+                        styles.priceLabel
+                      }
+                    >
+                      {t.pricePackOnly}
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.priceValue
+                      }
+                    >
+                      ₱
+                      {sellingPricePack.toFixed(
+                        2
+                      )}
+                    </Text>
                   </View>
 
                   {item.isTingiEnabled && (
-                    <View style={[styles.priceBlock, { flex: 1, alignItems: 'flex-end', paddingRight: 6 }]}>
-                      <Text style={styles.priceLabel}>{t.priceTingiOnly}</Text>
-                      <Text style={[styles.priceValue, { color: '#38BDF8' }]}>₱{item.sellingPricePiece.toFixed(2)}</Text>
+                    <View
+                      style={[
+                        styles.priceBlock,
+                        {
+                          flex: 1,
+                          alignItems:
+                            'flex-end',
+                          paddingRight: 6,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={
+                          styles.priceLabel
+                        }
+                      >
+                        {t.priceTingiOnly}
+                      </Text>
+
+                      <Text
+                        style={[
+                          styles.priceValue,
+                          {
+                            color:
+                              '#38BDF8',
+                          },
+                        ]}
+                      >
+                        ₱
+                        {sellingPricePiece.toFixed(
+                          2
+                        )}
+                      </Text>
                     </View>
                   )}
                 </View>
               )}
 
-              {/* Actions & Buy Buttons */}
-              <View style={styles.cardFooterRow}>
-                <TouchableOpacity
-                  style={styles.btnRestock}
-                  onPress={() => setRestockProduct(item)}
-                >
-                  <Text style={styles.btnRestockText}>{t.restock}</Text>
-                </TouchableOpacity>
+              {/* Actions */}
+              <View
+                style={
+                  styles.cardFooterRow
+                }
+              >
+                {/* Restock is now Admin Only */}
+                {!isCashierMode && (
+                  <TouchableOpacity
+                    style={
+                      styles.btnRestock
+                    }
+                    onPress={() =>
+                      setRestockProduct(
+                        item
+                      )
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.btnRestockText
+                      }
+                    >
+                      {t.restock}
+                    </Text>
+                  </TouchableOpacity>
+                )}
 
                 {!isCashierMode && (
                   <>
                     <TouchableOpacity
-                      style={styles.btnActionSmall}
+                      style={
+                        styles.btnActionSmall
+                      }
                       onPress={() => {
-                        setSelectedProduct(item);
-                        setIsProductModalOpen(true);
+                        setSelectedProduct(
+                          item
+                        );
+                        setIsProductModalOpen(
+                          true
+                        );
                       }}
                     >
-                      <Text style={styles.btnActionSmallText}>{t.edit}</Text>
+                      <Text
+                        style={
+                          styles.btnActionSmallText
+                        }
+                      >
+                        {t.edit}
+                      </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.btnActionSmall, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}
-                      onPress={() => onDeleteProduct(item.id, item.name)}
+                      style={[
+                        styles.btnActionSmall,
+                        {
+                          backgroundColor:
+                            'rgba(239, 68, 68, 0.12)',
+                        },
+                      ]}
+                      onPress={() =>
+                        onDeleteProduct(
+                          item.id,
+                          item.name
+                        )
+                      }
                     >
-                      <Text style={[styles.btnActionSmallText, { color: '#F87171' }]}>{t.delete}</Text>
+                      <Text
+                        style={[
+                          styles.btnActionSmallText,
+                          {
+                            color:
+                              '#F87171',
+                          },
+                        ]}
+                      >
+                        {t.delete}
+                      </Text>
                     </TouchableOpacity>
                   </>
                 )}
 
-                <View style={styles.buyButtonRow}>
+                <View
+                  style={
+                    styles.buyButtonRow
+                  }
+                >
                   {item.isTingiEnabled && (
                     <TouchableOpacity
-                      style={styles.btnBuyTingi}
-                      onPress={() => handleAddToCart(item, 'piece')}
+                      style={
+                        styles.btnBuyTingi
+                      }
+                      onPress={() =>
+                        handleAddToCart(
+                          item,
+                          'piece'
+                        )
+                      }
                     >
-                      <Text style={styles.btnBuyTingiText}>{t.addTingi}</Text>
+                      <Text
+                        style={
+                          styles.btnBuyTingiText
+                        }
+                      >
+                        {t.addTingi}
+                      </Text>
                     </TouchableOpacity>
                   )}
 
                   <TouchableOpacity
-                    style={styles.btnBuyPack}
-                    onPress={() => handleAddToCart(item, 'pack')}
+                    style={
+                      styles.btnBuyPack
+                    }
+                    onPress={() =>
+                      handleAddToCart(
+                        item,
+                        'pack'
+                      )
+                    }
                   >
-                    <Text style={styles.btnBuyPackText}>{t.addPack}</Text>
+                    <Text
+                      style={
+                        styles.btnBuyPackText
+                      }
+                    >
+                      {t.addPack}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -698,112 +1633,317 @@ export default function DashboardScreen({
 
       {/* Floating Cart */}
       {cart.length > 0 && (
-        <View style={styles.cartFloatingBar}>
+        <View
+          style={
+            styles.cartFloatingBar
+          }
+        >
           <View>
-            <Text style={styles.cartCount}>{cartTotalItemsCount} {t.itemsInCart}</Text>
-            <Text style={styles.cartPrice}>{t.total}: ₱{cartTotalAmount.toFixed(2)}</Text>
+            <Text
+              style={
+                styles.cartCount
+              }
+            >
+              {cartTotalItemsCount}{' '}
+              {t.itemsInCart}
+            </Text>
+
+            <Text
+              style={
+                styles.cartPrice
+              }
+            >
+              {t.total}: ₱
+              {cartTotalAmount.toFixed(
+                2
+              )}
+            </Text>
           </View>
 
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity style={styles.btnClearCart} onPress={handleClearCart}>
-              <Text style={styles.btnClearCartText}>{t.clear}</Text>
+          <View
+            style={{
+              flexDirection:
+                'row',
+              gap: 8,
+            }}
+          >
+            <TouchableOpacity
+              style={
+                styles.btnClearCart
+              }
+              onPress={
+                handleClearCart
+              }
+            >
+              <Text
+                style={
+                  styles.btnClearCartText
+                }
+              >
+                {t.clear}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.btnCheckout}
+              style={
+                styles.btnCheckout
+              }
               activeOpacity={0.8}
               onPress={() => {
-                setPaymentType('cash');
-                setCashTendered(cartTotalAmount.toString());
-                setIsCheckoutOpen(true);
+                setPaymentType(
+                  'cash'
+                );
+                setCashTendered(
+                  cartTotalAmount.toString()
+                );
+                setIsCheckoutOpen(
+                  true
+                );
               }}
             >
-              <Text style={styles.btnCheckoutText}>{t.checkoutBtn}</Text>
+              <Text
+                style={
+                  styles.btnCheckoutText
+                }
+              >
+                {t.checkoutBtn}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
       )}
 
       {/* CHECKOUT MODAL */}
-      <Modal visible={isCheckoutOpen} animationType="slide" transparent={true}>
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
-          style={styles.checkoutOverlay}
+      <Modal
+        visible={isCheckoutOpen}
+        animationType="slide"
+        transparent={true}
+      >
+        <KeyboardAvoidingView
+          behavior={
+            Platform.OS === 'ios'
+              ? 'padding'
+              : undefined
+          }
+          style={
+            styles.checkoutOverlay
+          }
         >
-          <View style={styles.checkoutCard}>
-            <Text style={styles.checkoutTitle}>{t.choosePayment}</Text>
+          <View
+            style={
+              styles.checkoutCard
+            }
+          >
+            <Text
+              style={
+                styles.checkoutTitle
+              }
+            >
+              {t.choosePayment}
+            </Text>
 
-            <View style={styles.paymentMethodRow}>
+            <View
+              style={
+                styles.paymentMethodRow
+              }
+            >
               <TouchableOpacity
-                style={[styles.btnPayType, paymentType === 'cash' && styles.btnPayTypeActive]}
-                onPress={() => setPaymentType('cash')}
+                style={[
+                  styles.btnPayType,
+                  paymentType ===
+                    'cash' &&
+                    styles.btnPayTypeActive,
+                ]}
+                onPress={() =>
+                  setPaymentType(
+                    'cash'
+                  )
+                }
               >
-                <Text style={[styles.btnPayTypeText, paymentType === 'cash' && styles.btnPayTypeTextActive]}>
+                <Text
+                  style={[
+                    styles.btnPayTypeText,
+                    paymentType ===
+                      'cash' &&
+                      styles.btnPayTypeTextActive,
+                  ]}
+                >
                   {t.cashPayment}
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.btnPayType, paymentType === 'debt' && styles.btnPayTypeActiveRed]}
-                onPress={() => setPaymentType('debt')}
+                style={[
+                  styles.btnPayType,
+                  paymentType ===
+                    'debt' &&
+                    styles.btnPayTypeActiveRed,
+                ]}
+                onPress={() =>
+                  setPaymentType(
+                    'debt'
+                  )
+                }
               >
-                <Text style={[styles.btnPayTypeText, paymentType === 'debt' && styles.btnPayTypeTextActiveRed]}>
+                <Text
+                  style={[
+                    styles.btnPayTypeText,
+                    paymentType ===
+                      'debt' &&
+                      styles.btnPayTypeTextActiveRed,
+                  ]}
+                >
                   {t.debtPayment}
                 </Text>
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.checkoutAmountLabel}>{t.totalAmountLabel}</Text>
-            <Text style={styles.checkoutAmount}>₱{cartTotalAmount.toFixed(2)}</Text>
+            <Text
+              style={
+                styles.checkoutAmountLabel
+              }
+            >
+              {t.totalAmountLabel}
+            </Text>
 
-            {paymentType === 'cash' ? (
+            <Text
+              style={
+                styles.checkoutAmount
+              }
+            >
+              ₱
+              {cartTotalAmount.toFixed(
+                2
+              )}
+            </Text>
+
+            {paymentType ===
+            'cash' ? (
               <>
-                <Text style={styles.checkoutInputLabel}>{t.cashTenderedLabel}</Text>
+                <Text
+                  style={
+                    styles.checkoutInputLabel
+                  }
+                >
+                  {t.cashTenderedLabel}
+                </Text>
+
                 <TextInput
-                  style={styles.checkoutInput}
+                  style={
+                    styles.checkoutInput
+                  }
                   keyboardType="decimal-pad"
-                  value={cashTendered}
-                  onChangeText={setCashTendered}
+                  value={
+                    cashTendered
+                  }
+                  onChangeText={
+                    setCashTendered
+                  }
                   autoFocus
                 />
 
-                {cashValueCheckout >= cartTotalAmount && (
-                  <View style={styles.changeBadge}>
-                    <Text style={styles.changeLabel}>{t.changeLabel}</Text>
-                    <Text style={styles.changeValue}>
-                      ₱{(cashValueCheckout - cartTotalAmount).toFixed(2)}
+                {cashValueCheckout >=
+                  cartTotalAmount && (
+                  <View
+                    style={
+                      styles.changeBadge
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.changeLabel
+                      }
+                    >
+                      {t.changeLabel}
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.changeValue
+                      }
+                    >
+                      ₱
+                      {(
+                        cashValueCheckout -
+                        cartTotalAmount
+                      ).toFixed(2)}
                     </Text>
                   </View>
                 )}
               </>
             ) : (
               <>
-                <Text style={styles.checkoutInputLabel}>{t.customerNameLabel}</Text>
+                <Text
+                  style={
+                    styles.checkoutInputLabel
+                  }
+                >
+                  {t.customerNameLabel}
+                </Text>
+
                 <TextInput
-                  style={styles.checkoutInput}
+                  style={
+                    styles.checkoutInput
+                  }
                   placeholder="e.g., Alex Santos"
                   placeholderTextColor="#64748B"
-                  value={customerName}
-                  onChangeText={setCustomerName}
+                  value={
+                    customerName
+                  }
+                  onChangeText={
+                    setCustomerName
+                  }
                   autoFocus
                 />
               </>
             )}
 
-            <View style={styles.checkoutButtonsRow}>
+            <View
+              style={
+                styles.checkoutButtonsRow
+              }
+            >
               <TouchableOpacity
-                style={styles.btnCancelCheckout}
-                onPress={() => setIsCheckoutOpen(false)}
+                style={
+                  styles.btnCancelCheckout
+                }
+                onPress={() =>
+                  setIsCheckoutOpen(
+                    false
+                  )
+                }
               >
-                <Text style={styles.btnCancelCheckoutText}>{t.backBtn}</Text>
+                <Text
+                  style={
+                    styles.btnCancelCheckoutText
+                  }
+                >
+                  {t.backBtn}
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.btnConfirmSale, paymentType === 'debt' && { backgroundColor: '#EF4444' }]}
-                onPress={handleProcessCheckout}
+                style={[
+                  styles.btnConfirmSale,
+                  paymentType ===
+                    'debt' && {
+                    backgroundColor:
+                      '#EF4444',
+                  },
+                ]}
+                onPress={
+                  handleProcessCheckout
+                }
               >
-                <Text style={styles.btnConfirmSaleText}>
-                  {paymentType === 'cash' ? t.printReceiptBtn : t.recordDebtBtn}
+                <Text
+                  style={
+                    styles.btnConfirmSaleText
+                  }
+                >
+                  {paymentType ===
+                  'cash'
+                    ? t.printReceiptBtn
+                    : t.recordDebtBtn}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -811,101 +1951,234 @@ export default function DashboardScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* DYNAMIC SECURITY PIN MODAL (WITH LIVE COUNTDOWN BANNER) */}
-      <Modal visible={isPinModalOpen} animationType="fade" transparent={true}>
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
-          style={styles.checkoutOverlay}
+      {/* PIN MODAL */}
+      <Modal
+        visible={isPinModalOpen}
+        animationType="fade"
+        transparent={true}
+      >
+        <KeyboardAvoidingView
+          behavior={
+            Platform.OS === 'ios'
+              ? 'padding'
+              : undefined
+          }
+          style={
+            styles.checkoutOverlay
+          }
         >
-          <View style={styles.checkoutCard}>
-            <Text style={styles.checkoutTitle}>
-              {pinModalMode === 'create'
+          <View
+            style={
+              styles.checkoutCard
+            }
+          >
+            <Text
+              style={
+                styles.checkoutTitle
+              }
+            >
+              {pinModalMode ===
+              'create'
                 ? '🔒 Set 4-Digit PIN'
-                : pinModalMode === 'change'
+                : pinModalMode ===
+                  'change'
                 ? '⚙️ Change Admin PIN'
                 : '🔐 Admin PIN Required'}
             </Text>
 
-            <Text style={styles.pinSubText}>
-              {pinModalMode === 'create'
+            <Text
+              style={
+                styles.pinSubText
+              }
+            >
+              {pinModalMode ===
+              'create'
                 ? 'Create a 4-digit Security PIN before switching to Cashier Mode.'
-                : pinModalMode === 'change'
+                : pinModalMode ===
+                  'change'
                 ? 'Enter a new 4-digit PIN for your store terminal.'
                 : 'Enter your 4-digit PIN to unlock Admin Mode.'}
             </Text>
 
-            {/* LIVE COUNTDOWN WARNING BANNER */}
             {lockoutTimer > 0 && (
-              <View style={styles.lockoutBanner}>
-                <Text style={styles.lockoutBannerEmoji}>⏳</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.lockoutBannerTitle}>Too many attempts!</Text>
-                  <Text style={styles.lockoutBannerText}>
-                    PIN entry is locked. Try again in{' '}
-                    <Text style={styles.lockoutCountdown}>{lockoutTimer}s</Text>
+              <View
+                style={
+                  styles.lockoutBanner
+                }
+              >
+                <Text
+                  style={
+                    styles.lockoutBannerEmoji
+                  }
+                >
+                  ⏳
+                </Text>
+
+                <View
+                  style={{
+                    flex: 1,
+                  }}
+                >
+                  <Text
+                    style={
+                      styles.lockoutBannerTitle
+                    }
+                  >
+                    Too many attempts!
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.lockoutBannerText
+                    }
+                  >
+                    PIN entry is locked.
+                    Try again in{' '}
+                    <Text
+                      style={
+                        styles.lockoutCountdown
+                      }
+                    >
+                      {lockoutTimer}s
+                    </Text>
                   </Text>
                 </View>
               </View>
             )}
 
-            <Text style={styles.checkoutInputLabel}>
-              {pinModalMode === 'unlock' ? 'ADMIN PIN' : 'NEW 4-DIGIT PIN'}
+            <Text
+              style={
+                styles.checkoutInputLabel
+              }
+            >
+              {pinModalMode ===
+              'unlock'
+                ? 'ADMIN PIN'
+                : 'NEW 4-DIGIT PIN'}
             </Text>
+
             <TextInput
               style={[
                 styles.checkoutInput,
-                { textAlign: 'center', fontSize: 24, letterSpacing: 8 },
-                lockoutTimer > 0 && styles.inputLocked,
+                {
+                  textAlign:
+                    'center',
+                  fontSize: 24,
+                  letterSpacing: 8,
+                },
+                lockoutTimer >
+                  0 &&
+                  styles.inputLocked,
               ]}
               keyboardType="number-pad"
               secureTextEntry
               maxLength={4}
               value={pinInput}
-              onChangeText={setPinInput}
-              editable={lockoutTimer === 0}
-              placeholder={lockoutTimer > 0 ? 'LOCKED' : '••••'}
+              onChangeText={
+                setPinInput
+              }
+              editable={
+                lockoutTimer === 0
+              }
+              placeholder={
+                lockoutTimer > 0
+                  ? 'LOCKED'
+                  : '••••'
+              }
               placeholderTextColor="#475569"
-              autoFocus={lockoutTimer === 0}
+              autoFocus={
+                lockoutTimer === 0
+              }
             />
 
-            {(pinModalMode === 'create' || pinModalMode === 'change') && (
+            {(pinModalMode ===
+              'create' ||
+              pinModalMode ===
+                'change') && (
               <>
-                <Text style={styles.checkoutInputLabel}>CONFIRM PIN</Text>
+                <Text
+                  style={
+                    styles.checkoutInputLabel
+                  }
+                >
+                  CONFIRM PIN
+                </Text>
+
                 <TextInput
-                  style={[styles.checkoutInput, { textAlign: 'center', fontSize: 24, letterSpacing: 8 }]}
+                  style={[
+                    styles.checkoutInput,
+                    {
+                      textAlign:
+                        'center',
+                      fontSize: 24,
+                      letterSpacing: 8,
+                    },
+                  ]}
                   keyboardType="number-pad"
                   secureTextEntry
                   maxLength={4}
-                  value={pinConfirmInput}
-                  onChangeText={setPinConfirmInput}
+                  value={
+                    pinConfirmInput
+                  }
+                  onChangeText={
+                    setPinConfirmInput
+                  }
                 />
               </>
             )}
 
-            <View style={styles.checkoutButtonsRow}>
+            <View
+              style={
+                styles.checkoutButtonsRow
+              }
+            >
               <TouchableOpacity
-                style={styles.btnCancelCheckout}
+                style={
+                  styles.btnCancelCheckout
+                }
                 onPress={() => {
-                  setIsPinModalOpen(false);
+                  setIsPinModalOpen(
+                    false
+                  );
                   setPinInput('');
-                  setPinConfirmInput('');
+                  setPinConfirmInput(
+                    ''
+                  );
                 }}
               >
-                <Text style={styles.btnCancelCheckoutText}>{t.cancelBtn}</Text>
+                <Text
+                  style={
+                    styles.btnCancelCheckoutText
+                  }
+                >
+                  {t.cancelBtn}
+                </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[
                   styles.btnConfirmSale,
-                  lockoutTimer > 0 && { backgroundColor: '#334155' }
-                ]} 
-                onPress={handlePinSubmit}
-                disabled={lockoutTimer > 0}
+                  lockoutTimer > 0 && {
+                    backgroundColor:
+                      '#334155',
+                  },
+                ]}
+                onPress={
+                  handlePinSubmit
+                }
+                disabled={
+                  lockoutTimer > 0
+                }
               >
-                <Text style={styles.btnConfirmSaleText}>
+                <Text
+                  style={
+                    styles.btnConfirmSaleText
+                  }
+                >
                   {lockoutTimer > 0
                     ? `Locked (${lockoutTimer}s)`
-                    : pinModalMode === 'unlock'
+                    : pinModalMode ===
+                      'unlock'
                     ? 'Unlock ✓'
                     : t.saveBtn}
                 </Text>
@@ -915,167 +2188,478 @@ export default function DashboardScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* MULTI-FUNCTION CASH DRAWER MODAL */}
-      <Modal visible={isSetCashModalOpen} animationType="fade" transparent={true}>
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
-          style={styles.checkoutOverlay}
+      {/* CASH DRAWER MODAL */}
+      <Modal
+        visible={isSetCashModalOpen}
+        animationType="fade"
+        transparent={true}
+      >
+        <KeyboardAvoidingView
+          behavior={
+            Platform.OS === 'ios'
+              ? 'padding'
+              : undefined
+          }
+          style={
+            styles.checkoutOverlay
+          }
         >
-          <View style={styles.checkoutCard}>
-            <Text style={styles.checkoutTitle}>💵 Cash Drawer Management</Text>
+          <View
+            style={
+              styles.checkoutCard
+            }
+          >
+            <Text
+              style={
+                styles.checkoutTitle
+              }
+            >
+              💵 Cash Drawer Management
+            </Text>
 
-            {/* Tab Navigation (3 Tabs) */}
-            <View style={[styles.paymentMethodRow, { gap: 4 }]}>
+            <View
+              style={[
+                styles.paymentMethodRow,
+                { gap: 4 },
+              ]}
+            >
               <TouchableOpacity
-                style={[styles.btnPayTypeMini, drawerModalTab === 'starting' && styles.btnPayTypeActive]}
-                onPress={() => setDrawerModalTab('starting')}
+                style={[
+                  styles.btnPayTypeMini,
+                  drawerModalTab ===
+                    'starting' &&
+                    styles.btnPayTypeActive,
+                ]}
+                onPress={() =>
+                  setDrawerModalTab(
+                    'starting'
+                  )
+                }
               >
-                <Text style={[styles.btnPayTypeMiniText, drawerModalTab === 'starting' && styles.btnPayTypeTextActive]}>
+                <Text
+                  style={[
+                    styles.btnPayTypeMiniText,
+                    drawerModalTab ===
+                      'starting' &&
+                      styles.btnPayTypeTextActive,
+                  ]}
+                >
                   Starting Cash
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.btnPayTypeMini, drawerModalTab === 'movement' && styles.btnPayTypeActive]}
-                onPress={() => setDrawerModalTab('movement')}
+                style={[
+                  styles.btnPayTypeMini,
+                  drawerModalTab ===
+                    'movement' &&
+                    styles.btnPayTypeActive,
+                ]}
+                onPress={() =>
+                  setDrawerModalTab(
+                    'movement'
+                  )
+                }
               >
-                <Text style={[styles.btnPayTypeMiniText, drawerModalTab === 'movement' && styles.btnPayTypeTextActive]}>
+                <Text
+                  style={[
+                    styles.btnPayTypeMiniText,
+                    drawerModalTab ===
+                      'movement' &&
+                      styles.btnPayTypeTextActive,
+                  ]}
+                >
                   Expense / Inflow
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.btnPayTypeMini, drawerModalTab === 'history' && styles.btnPayTypeActive]}
-                onPress={() => setDrawerModalTab('history')}
+                style={[
+                  styles.btnPayTypeMini,
+                  drawerModalTab ===
+                    'history' &&
+                    styles.btnPayTypeActive,
+                ]}
+                onPress={() =>
+                  setDrawerModalTab(
+                    'history'
+                  )
+                }
               >
-                <Text style={[styles.btnPayTypeMiniText, drawerModalTab === 'history' && styles.btnPayTypeTextActive]}>
-                  Log ({cashMovements.length})
+                <Text
+                  style={[
+                    styles.btnPayTypeMiniText,
+                    drawerModalTab ===
+                      'history' &&
+                      styles.btnPayTypeTextActive,
+                  ]}
+                >
+                  Log (
+                  {
+                    storeCashMovements.length
+                  }
+                  )
                 </Text>
               </TouchableOpacity>
             </View>
 
-            {drawerModalTab === 'starting' && (
+            {drawerModalTab ===
+              'starting' && (
               <>
-                <Text style={styles.pinSubText}>
+                <Text
+                  style={
+                    styles.pinSubText
+                  }
+                >
                   Set the starting cash amount in your drawer at the beginning of the day.
                 </Text>
 
-                <Text style={styles.checkoutInputLabel}>STARTING CASH:</Text>
+                <Text
+                  style={
+                    styles.checkoutInputLabel
+                  }
+                >
+                  STARTING CASH:
+                </Text>
+
                 <TextInput
-                  style={[styles.checkoutInput, { fontSize: 20 }]}
+                  style={[
+                    styles.checkoutInput,
+                    { fontSize: 20 },
+                  ]}
                   keyboardType="decimal-pad"
                   placeholder="e.g., 1000"
                   placeholderTextColor="#64748B"
-                  value={tempStartingCashInput}
-                  onChangeText={setTempStartingCashInput}
+                  value={
+                    tempStartingCashInput
+                  }
+                  onChangeText={
+                    setTempStartingCashInput
+                  }
                   autoFocus
                 />
 
-                <View style={styles.checkoutButtonsRow}>
+                <View
+                  style={
+                    styles.checkoutButtonsRow
+                  }
+                >
                   <TouchableOpacity
-                    style={styles.btnCancelCheckout}
-                    onPress={() => setIsSetCashModalOpen(false)}
+                    style={
+                      styles.btnCancelCheckout
+                    }
+                    onPress={() =>
+                      setIsSetCashModalOpen(
+                        false
+                      )
+                    }
                   >
-                    <Text style={styles.btnCancelCheckoutText}>{t.cancelBtn}</Text>
+                    <Text
+                      style={
+                        styles.btnCancelCheckoutText
+                      }
+                    >
+                      {t.cancelBtn}
+                    </Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity 
-                    style={styles.btnConfirmSale} 
-                    onPress={handleSaveStartingCashSubmit}
+                  <TouchableOpacity
+                    style={
+                      styles.btnConfirmSale
+                    }
+                    onPress={
+                      handleSaveStartingCashSubmit
+                    }
                   >
-                    <Text style={styles.btnConfirmSaleText}>{t.saveBtn}</Text>
+                    <Text
+                      style={
+                        styles.btnConfirmSaleText
+                      }
+                    >
+                      {t.saveBtn}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </>
             )}
 
-            {drawerModalTab === 'movement' && (
+            {drawerModalTab ===
+              'movement' && (
               <>
-                <View style={[styles.paymentMethodRow, { marginBottom: 12 }]}>
+                <View
+                  style={[
+                    styles.paymentMethodRow,
+                    { marginBottom: 12 },
+                  ]}
+                >
                   <TouchableOpacity
-                    style={[styles.btnPayType, movementType === 'out' && styles.btnPayTypeActiveRed]}
-                    onPress={() => setMovementType('out')}
+                    style={[
+                      styles.btnPayType,
+                      movementType ===
+                        'out' &&
+                        styles.btnPayTypeActiveRed,
+                    ]}
+                    onPress={() =>
+                      setMovementType(
+                        'out'
+                      )
+                    }
                   >
-                    <Text style={[styles.btnPayTypeText, movementType === 'out' && styles.btnPayTypeTextActiveRed]}>
+                    <Text
+                      style={[
+                        styles.btnPayTypeText,
+                        movementType ===
+                          'out' &&
+                          styles.btnPayTypeTextActiveRed,
+                      ]}
+                    >
                       💸 Expense / Out
                     </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={[styles.btnPayType, movementType === 'in' && styles.btnPayTypeActive]}
-                    onPress={() => setMovementType('in')}
+                    style={[
+                      styles.btnPayType,
+                      movementType ===
+                        'in' &&
+                        styles.btnPayTypeActive,
+                    ]}
+                    onPress={() =>
+                      setMovementType(
+                        'in'
+                      )
+                    }
                   >
-                    <Text style={[styles.btnPayTypeText, movementType === 'in' && styles.btnPayTypeTextActive]}>
+                    <Text
+                      style={[
+                        styles.btnPayTypeText,
+                        movementType ===
+                          'in' &&
+                          styles.btnPayTypeTextActive,
+                      ]}
+                    >
                       💰 Add Cash / In
                     </Text>
                   </TouchableOpacity>
                 </View>
 
-                <Text style={styles.checkoutInputLabel}>AMOUNT (₱):</Text>
+                <Text
+                  style={
+                    styles.checkoutInputLabel
+                  }
+                >
+                  AMOUNT (₱):
+                </Text>
+
                 <TextInput
-                  style={[styles.checkoutInput, { fontSize: 18 }]}
+                  style={[
+                    styles.checkoutInput,
+                    { fontSize: 18 },
+                  ]}
                   keyboardType="decimal-pad"
                   placeholder="0.00"
                   placeholderTextColor="#64748B"
-                  value={movementAmount}
-                  onChangeText={setMovementAmount}
+                  value={
+                    movementAmount
+                  }
+                  onChangeText={
+                    setMovementAmount
+                  }
                   autoFocus
                 />
 
-                <Text style={styles.checkoutInputLabel}>REASON / DESCRIPTION (OPTIONAL):</Text>
+                <Text
+                  style={
+                    styles.checkoutInputLabel
+                  }
+                >
+                  REASON / DESCRIPTION (OPTIONAL):
+                </Text>
+
                 <TextInput
-                  style={styles.checkoutInput}
+                  style={
+                    styles.checkoutInput
+                  }
                   placeholder="e.g., Bought ice, Delivery fee"
                   placeholderTextColor="#64748B"
-                  value={movementReason}
-                  onChangeText={setMovementReason}
+                  value={
+                    movementReason
+                  }
+                  onChangeText={
+                    setMovementReason
+                  }
                 />
 
-                <View style={styles.checkoutButtonsRow}>
+                <View
+                  style={
+                    styles.checkoutButtonsRow
+                  }
+                >
                   <TouchableOpacity
-                    style={styles.btnCancelCheckout}
-                    onPress={() => setIsSetCashModalOpen(false)}
+                    style={
+                      styles.btnCancelCheckout
+                    }
+                    onPress={() =>
+                      setIsSetCashModalOpen(
+                        false
+                      )
+                    }
                   >
-                    <Text style={styles.btnCancelCheckoutText}>{t.cancelBtn}</Text>
+                    <Text
+                      style={
+                        styles.btnCancelCheckoutText
+                      }
+                    >
+                      {t.cancelBtn}
+                    </Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity 
-                    style={[styles.btnConfirmSale, movementType === 'out' && { backgroundColor: '#EF4444' }]} 
-                    onPress={handleAddMovementSubmit}
+                  <TouchableOpacity
+                    style={[
+                      styles.btnConfirmSale,
+                      movementType ===
+                        'out' && {
+                        backgroundColor:
+                          '#EF4444',
+                      },
+                    ]}
+                    onPress={
+                      handleAddMovementSubmit
+                    }
                   >
-                    <Text style={styles.btnConfirmSaleText}>Record ✓</Text>
+                    <Text
+                      style={
+                        styles.btnConfirmSaleText
+                      }
+                    >
+                      Record ✓
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </>
             )}
 
-            {drawerModalTab === 'history' && (
-              <View style={{ maxHeight: 260 }}>
-                {cashMovements.length === 0 ? (
-                  <View style={{ paddingVertical: 30, alignItems: 'center' }}>
-                    <Text style={{ color: '#64748B', fontSize: 13 }}>No cash movements recorded.</Text>
+            {drawerModalTab ===
+              'history' && (
+              <View
+                style={{
+                  maxHeight: 260,
+                }}
+              >
+                {storeCashMovements.length ===
+                0 ? (
+                  <View
+                    style={{
+                      paddingVertical: 30,
+                      alignItems:
+                        'center',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color:
+                          '#64748B',
+                        fontSize: 13,
+                      }}
+                    >
+                      No cash movements recorded.
+                    </Text>
                   </View>
                 ) : (
-                  <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
-                    {cashMovements.map((item) => (
-                      <View key={item.id} style={styles.movementItemRow}>
-                        <View style={{ flex: 1, paddingRight: 8 }}>
-                          <Text style={styles.movementItemReason}>{item.reason}</Text>
-                          <Text style={styles.movementItemDate}>{item.createdAt}</Text>
+                  <ScrollView
+                    showsVerticalScrollIndicator={
+                      false
+                    }
+                    style={{
+                      marginVertical: 8,
+                    }}
+                  >
+                    {storeCashMovements.map(
+                      (item) => (
+                        <View
+                          key={String(
+                            item.id
+                          )}
+                          style={
+                            styles.movementItemRow
+                          }
+                        >
+                          <View
+                            style={{
+                              flex: 1,
+                              paddingRight: 8,
+                            }}
+                          >
+                            <Text
+                              style={
+                                styles.movementItemReason
+                              }
+                            >
+                              {
+                                item.reason
+                              }
+                            </Text>
+
+                            <Text
+                              style={
+                                styles.movementItemDate
+                              }
+                            >
+                              {
+                                item.createdAt
+                              }
+                            </Text>
+                          </View>
+
+                          <Text
+                            style={[
+                              styles.movementItemAmount,
+                              {
+                                color:
+                                  item.type ===
+                                  'out'
+                                    ? '#F87171'
+                                    : '#34D399',
+                              },
+                            ]}
+                          >
+                            {item.type ===
+                            'out'
+                              ? '-'
+                              : '+'}
+                            ₱
+                            {(
+                              Number(
+                                item.amount
+                              ) || 0
+                            ).toFixed(
+                              2
+                            )}
+                          </Text>
                         </View>
-                        <Text style={[styles.movementItemAmount, { color: item.type === 'out' ? '#F87171' : '#34D399' }]}>
-                          {item.type === 'out' ? '-' : '+'}₱{item.amount.toFixed(2)}
-                        </Text>
-                      </View>
-                    ))}
+                      )
+                    )}
                   </ScrollView>
                 )}
 
                 <TouchableOpacity
-                  style={[styles.btnCancelCheckout, { marginTop: 10 }]}
-                  onPress={() => setIsSetCashModalOpen(false)}
+                  style={[
+                    styles.btnCancelCheckout,
+                    { marginTop: 10 },
+                  ]}
+                  onPress={() =>
+                    setIsSetCashModalOpen(
+                      false
+                    )
+                  }
                 >
-                  <Text style={styles.btnCancelCheckoutText}>Close</Text>
+                  <Text
+                    style={
+                      styles.btnCancelCheckoutText
+                    }
+                  >
+                    Close
+                  </Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -1083,56 +2667,122 @@ export default function DashboardScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* External Data Modals */}
+      {/* RESTOCK */}
       <RestockModal
         visible={!!restockProduct}
-        onClose={() => setRestockProduct(null)}
+        onClose={() =>
+          setRestockProduct(null)
+        }
         product={restockProduct}
-        onConfirmRestock={onRestockProduct}
+        onConfirmRestock={
+          onRestockProduct
+        }
       />
 
+      {/* PRODUCT MODAL */}
       <ProductModal
-        visible={isProductModalOpen}
-        onClose={() => setIsProductModalOpen(false)}
-        onSave={(p) => {
-          onSaveProduct({ ...p, storeId: activeStore.id });
-          setIsProductModalOpen(false);
+        visible={
+          isProductModalOpen
+        }
+        onClose={() =>
+          setIsProductModalOpen(
+            false
+          )
+        }
+        onSave={(product) => {
+          onSaveProduct({
+            ...product,
+            storeId:
+              activeStore.id,
+          });
+
+          setIsProductModalOpen(
+            false
+          );
         }}
-        initialProduct={selectedProduct}
+        initialProduct={
+          selectedProduct
+        }
       />
 
+      {/* RECEIPT */}
       <ReceiptModal
-        visible={!!activeReceipt}
-        onClose={() => setActiveReceipt(null)}
-        receiptData={activeReceipt}
-        storeName={activeStore.name}
-        receiptFooter={receiptSettings?.footer}
-        receiptContact={receiptSettings?.contact}
+        visible={
+          !!activeReceipt
+        }
+        onClose={() =>
+          setActiveReceipt(
+            null
+          )
+        }
+        receiptData={
+          activeReceipt
+        }
+        storeName={
+          activeStore.name
+        }
+        receiptFooter={
+          receiptSettings?.footer
+        }
+        receiptContact={
+          receiptSettings?.contact
+        }
       />
 
+      {/* SALES HISTORY */}
       <SalesHistoryModal
-        visible={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
+        visible={
+          isHistoryOpen
+        }
+        onClose={() =>
+          setIsHistoryOpen(
+            false
+          )
+        }
         sales={storeSales}
-        storeName={activeStore.name}
-        onViewReceipt={(receipt) => {
-          setIsHistoryOpen(false);
-          setActiveReceipt(receipt);
+        storeName={
+          activeStore.name
+        }
+        onViewReceipt={(
+          receipt
+        ) => {
+          setIsHistoryOpen(
+            false
+          );
+          setActiveReceipt(
+            receipt
+          );
         }}
       />
 
+      {/* DEBT */}
       <DebtModal
-        visible={isDebtOpen}
-        onClose={() => setIsDebtOpen(false)}
+        visible={
+          isDebtOpen
+        }
+        onClose={() =>
+          setIsDebtOpen(false)
+        }
         debts={storeDebts}
-        onPayDebt={onPayDebt}
+        onPayDebt={
+          onPayDebt
+        }
       />
 
+      {/* ANALYTICS */}
       <AnalyticsModal
-        visible={isAnalyticsOpen}
-        onClose={() => setIsAnalyticsOpen(false)}
+        visible={
+          isAnalyticsOpen
+        }
+        onClose={() =>
+          setIsAnalyticsOpen(
+            false
+          )
+        }
         sales={storeSales}
-        storeName={activeStore.name}
+        storeName={
+          activeStore.name
+        }
       />
     </View>
   );
@@ -1144,12 +2794,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
   },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
     gap: 8,
   },
+
   btnBack: {
     backgroundColor: '#0F172A',
     paddingVertical: 8,
@@ -1159,19 +2811,23 @@ const styles = StyleSheet.create({
     borderColor: '#1E293B',
     flexShrink: 0,
   },
+
   btnBackText: {
     color: '#38BDF8',
     fontSize: 13,
     fontWeight: '700',
   },
+
   headerScrollContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingRight: 10,
   },
+
   btnModeToggle: {
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    backgroundColor:
+      'rgba(56, 189, 248, 0.12)',
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 10,
@@ -1179,18 +2835,23 @@ const styles = StyleSheet.create({
     borderColor: '#38BDF8',
     flexShrink: 0,
   },
+
   btnModeCashierActive: {
-    backgroundColor: 'rgba(251, 191, 36, 0.15)',
+    backgroundColor:
+      'rgba(251, 191, 36, 0.15)',
     borderColor: '#FBBF24',
   },
+
   btnModeToggleText: {
     color: '#38BDF8',
     fontSize: 11,
     fontWeight: '800',
   },
+
   btnModeCashierActiveText: {
     color: '#FBBF24',
   },
+
   btnPinSettings: {
     backgroundColor: '#1E293B',
     paddingVertical: 8,
@@ -1200,13 +2861,16 @@ const styles = StyleSheet.create({
     borderColor: '#334155',
     flexShrink: 0,
   },
+
   btnPinSettingsText: {
     color: '#CBD5E1',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnAnalytics: {
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    backgroundColor:
+      'rgba(56, 189, 248, 0.15)',
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 10,
@@ -1214,25 +2878,31 @@ const styles = StyleSheet.create({
     borderColor: '#38BDF8',
     flexShrink: 0,
   },
+
   btnAnalyticsText: {
     color: '#38BDF8',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnDebtHeader: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    backgroundColor:
+      'rgba(239, 68, 68, 0.15)',
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderColor:
+      'rgba(239, 68, 68, 0.3)',
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 10,
     flexShrink: 0,
   },
+
   btnDebtHeaderText: {
     color: '#F87171',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnHistory: {
     backgroundColor: '#1E293B',
     paddingVertical: 8,
@@ -1242,11 +2912,13 @@ const styles = StyleSheet.create({
     borderColor: '#334155',
     flexShrink: 0,
   },
+
   btnHistoryText: {
     color: '#CBD5E1',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnAddProd: {
     backgroundColor: '#0284C7',
     paddingVertical: 8,
@@ -1254,11 +2926,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     flexShrink: 0,
   },
+
   btnAddProdText: {
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
   },
+
   bannerCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1270,39 +2944,47 @@ const styles = StyleSheet.create({
     borderColor: '#1E293B',
     marginBottom: 12,
   },
+
   storeName: {
     fontSize: 18,
     fontWeight: '800',
     color: '#F8FAFC',
   },
+
   ownerText: {
     fontSize: 12,
     color: '#94A3B8',
     marginTop: 2,
   },
+
   statsContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
+
   statBox: {
     alignItems: 'flex-end',
   },
+
   statDividerVertical: {
     width: 1,
     height: 26,
     backgroundColor: '#1E293B',
   },
+
   dailyStatLabel: {
     fontSize: 9,
     fontWeight: '700',
     color: '#64748B',
   },
+
   dailyStatValue: {
     fontSize: 15,
     fontWeight: '800',
     color: '#34D399',
   },
+
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1314,22 +2996,26 @@ const styles = StyleSheet.create({
     borderColor: '#1E293B',
     height: 44,
   },
+
   searchIcon: {
     fontSize: 14,
     marginRight: 8,
   },
+
   searchInput: {
     flex: 1,
     color: '#F8FAFC',
     fontSize: 13,
     fontWeight: '500',
   },
+
   searchClearBtn: {
     color: '#94A3B8',
     fontSize: 14,
     paddingHorizontal: 6,
     fontWeight: '700',
   },
+
   emptyContainer: {
     alignItems: 'center',
     paddingVertical: 36,
@@ -1339,15 +3025,18 @@ const styles = StyleSheet.create({
     borderColor: '#1E293B',
     marginTop: 10,
   },
+
   emptyEmoji: {
     fontSize: 32,
     marginBottom: 8,
   },
+
   emptyText: {
     color: '#F8FAFC',
     fontSize: 15,
     fontWeight: '700',
   },
+
   emptySubText: {
     color: '#64748B',
     fontSize: 12,
@@ -1355,6 +3044,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
   },
+
   pill: {
     backgroundColor: '#0F172A',
     paddingHorizontal: 14,
@@ -1364,18 +3054,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1E293B',
   },
+
   pillActive: {
     backgroundColor: '#0284C7',
     borderColor: '#38BDF8',
   },
+
   pillText: {
     fontSize: 12,
     color: '#94A3B8',
     fontWeight: '600',
   },
+
   pillTextActive: {
     color: '#FFFFFF',
   },
+
   productCard: {
     backgroundColor: '#0F172A',
     borderRadius: 16,
@@ -1384,31 +3078,37 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1E293B',
   },
+
   prodHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 8,
   },
+
   prodCategory: {
     fontSize: 9,
     fontWeight: '800',
     color: '#38BDF8',
   },
+
   prodName: {
     fontSize: 16,
     fontWeight: '700',
     color: '#F8FAFC',
   },
+
   stockBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
+
   stockBadgeText: {
     fontSize: 10,
     fontWeight: '700',
   },
+
   priceRow: {
     flexDirection: 'row',
     backgroundColor: '#070B14',
@@ -1417,25 +3117,31 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     justifyContent: 'space-between',
   },
+
   priceBlock: {
     alignItems: 'center',
   },
+
   priceLabel: {
     fontSize: 9,
     fontWeight: '700',
     color: '#64748B',
   },
+
   priceValue: {
     fontSize: 12,
     fontWeight: '800',
     color: '#F8FAFC',
   },
+
   cardFooterRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
+
   btnRestock: {
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    backgroundColor:
+      'rgba(56, 189, 248, 0.15)',
     borderWidth: 1,
     borderColor: '#38BDF8',
     paddingVertical: 6,
@@ -1443,11 +3149,13 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginRight: 6,
   },
+
   btnRestockText: {
     color: '#38BDF8',
     fontSize: 10,
     fontWeight: '700',
   },
+
   btnActionSmall: {
     backgroundColor: '#1E293B',
     paddingVertical: 6,
@@ -1455,43 +3163,54 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginRight: 6,
   },
+
   btnActionSmallText: {
     color: '#CBD5E1',
     fontSize: 10,
     fontWeight: '600',
   },
+
   buyButtonRow: {
     flexDirection: 'row',
     gap: 6,
     marginLeft: 'auto',
   },
+
   btnBuyTingi: {
-    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    backgroundColor:
+      'rgba(56, 189, 248, 0.15)',
     borderWidth: 1,
     borderColor: '#38BDF8',
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 8,
   },
+
   btnBuyTingiText: {
     color: '#38BDF8',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnBuyPack: {
     backgroundColor: '#0284C7',
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 8,
   },
+
   btnBuyPackText: {
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
   },
+
   cartFloatingBar: {
     position: 'absolute',
-    bottom: Platform.OS === 'android' ? 36 : 24,
+    bottom:
+      Platform.OS === 'android'
+        ? 36
+        : 24,
     left: 16,
     right: 16,
     backgroundColor: '#0F172A',
@@ -1505,43 +3224,52 @@ const styles = StyleSheet.create({
     borderColor: '#0284C7',
     elevation: 12,
   },
+
   cartCount: {
     fontSize: 11,
     color: '#94A3B8',
   },
+
   cartPrice: {
     fontSize: 15,
     fontWeight: '800',
     color: '#F8FAFC',
   },
+
   btnClearCart: {
     backgroundColor: '#1E293B',
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 8,
   },
+
   btnClearCartText: {
     color: '#94A3B8',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnCheckout: {
     backgroundColor: '#0284C7',
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 8,
   },
+
   btnCheckoutText: {
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '800',
   },
+
   checkoutOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(3, 7, 18, 0.85)',
+    backgroundColor:
+      'rgba(3, 7, 18, 0.85)',
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
+
   checkoutCard: {
     backgroundColor: '#0F172A',
     borderRadius: 20,
@@ -1549,58 +3277,69 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1E293B',
   },
+
   checkoutTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: '#F8FAFC',
     marginBottom: 14,
   },
+
   pinSubText: {
     fontSize: 12,
     color: '#94A3B8',
     lineHeight: 18,
     marginBottom: 16,
   },
-  // Lockout Banner Styles
+
   lockoutBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    backgroundColor:
+      'rgba(239, 68, 68, 0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.4)',
+    borderColor:
+      'rgba(239, 68, 68, 0.4)',
     borderRadius: 12,
     padding: 12,
     marginBottom: 14,
   },
+
   lockoutBannerEmoji: {
     fontSize: 22,
   },
+
   lockoutBannerTitle: {
     color: '#F87171',
     fontSize: 12,
     fontWeight: '800',
     marginBottom: 2,
   },
+
   lockoutBannerText: {
     color: '#CBD5E1',
     fontSize: 11,
     lineHeight: 15,
   },
+
   lockoutCountdown: {
     color: '#F87171',
     fontWeight: '800',
     fontSize: 13,
   },
+
   inputLocked: {
     opacity: 0.5,
     borderColor: '#EF4444',
   },
+
   paymentMethodRow: {
     flexDirection: 'row',
     gap: 8,
     marginBottom: 16,
   },
+
   btnPayType: {
     flex: 1,
     backgroundColor: '#1E293B',
@@ -1610,6 +3349,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#334155',
   },
+
   btnPayTypeMini: {
     flex: 1,
     backgroundColor: '#1E293B',
@@ -1620,47 +3360,58 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#334155',
   },
+
   btnPayTypeMiniText: {
     color: '#94A3B8',
     fontSize: 11,
     fontWeight: '700',
   },
+
   btnPayTypeActive: {
     backgroundColor: '#0284C7',
     borderColor: '#38BDF8',
   },
+
   btnPayTypeActiveRed: {
-    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    backgroundColor:
+      'rgba(239, 68, 68, 0.2)',
     borderColor: '#EF4444',
   },
+
   btnPayTypeText: {
     color: '#94A3B8',
     fontSize: 12,
     fontWeight: '700',
   },
+
   btnPayTypeTextActive: {
     color: '#FFFFFF',
   },
+
   btnPayTypeTextActiveRed: {
     color: '#F87171',
   },
+
   checkoutAmountLabel: {
     fontSize: 10,
     fontWeight: '700',
     color: '#64748B',
   },
+
   checkoutAmount: {
     fontSize: 28,
     fontWeight: '800',
     color: '#38BDF8',
     marginBottom: 14,
   },
+
   checkoutInputLabel: {
     fontSize: 10,
     fontWeight: '700',
     color: '#CBD5E1',
     marginBottom: 6,
   },
+
   checkoutInput: {
     backgroundColor: '#070B14',
     borderWidth: 1,
@@ -1672,8 +3423,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 14,
   },
+
   changeBadge: {
-    backgroundColor: 'rgba(52, 211, 153, 0.1)',
+    backgroundColor:
+      'rgba(52, 211, 153, 0.1)',
     padding: 12,
     borderRadius: 10,
     marginBottom: 16,
@@ -1681,20 +3434,24 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+
   changeLabel: {
     color: '#34D399',
     fontSize: 11,
     fontWeight: '700',
   },
+
   changeValue: {
     color: '#34D399',
     fontSize: 16,
     fontWeight: '800',
   },
+
   checkoutButtonsRow: {
     flexDirection: 'row',
     gap: 10,
   },
+
   btnCancelCheckout: {
     flex: 1,
     backgroundColor: '#1E293B',
@@ -1702,11 +3459,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
+
   btnCancelCheckoutText: {
     color: '#94A3B8',
     fontSize: 13,
     fontWeight: '700',
   },
+
   btnConfirmSale: {
     flex: 2,
     backgroundColor: '#0284C7',
@@ -1714,11 +3473,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
+
   btnConfirmSaleText: {
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '800',
   },
+
   movementItemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1730,16 +3491,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1E293B',
   },
+
   movementItemReason: {
     color: '#F8FAFC',
     fontSize: 12,
     fontWeight: '700',
   },
+
   movementItemDate: {
     color: '#64748B',
     fontSize: 10,
     marginTop: 2,
   },
+
   movementItemAmount: {
     fontSize: 13,
     fontWeight: '800',

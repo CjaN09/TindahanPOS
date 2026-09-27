@@ -36,7 +36,9 @@
     "plugins": [
       "expo-status-bar",
       "expo-audio",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-sqlite",
+      "expo-secure-store"
     ]
   }
 }
